@@ -16,6 +16,14 @@ acs_09 <- get_acs(geography = "tract",
                   output = "wide",
                   geometry = TRUE)
 
+acs_19 <- get_acs(geography = "tract", 
+                  state = "Colorado",
+                  county = counties,
+                  variables = acs_vars, 
+                  year = 2019, 
+                  output = "wide",
+                  geometry = TRUE)
+
 write_sf(acs_09, "drcog.shp")
 
 ggplot(data = acs_09) +
