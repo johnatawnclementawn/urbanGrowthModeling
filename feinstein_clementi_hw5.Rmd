@@ -79,7 +79,8 @@ acs_09 <- get_acs(geography = "tract",
                   variables = acs_vars, 
                   year = 2009, 
                   output = "wide",
-                  geometry = TRUE)
+                  geometry = TRUE) %>% 
+  st_transform(crs = 26954)
 
 acs_19 <- get_acs(geography = "tract", 
                   state = "Colorado",
@@ -87,7 +88,21 @@ acs_19 <- get_acs(geography = "tract",
                   variables = acs_vars, 
                   year = 2019, 
                   output = "wide",
-                  geometry = TRUE)
+                  geometry = TRUE) %>% 
+  st_transform(crs = 26954)
+
+acs_09_sf <- st_sf(acs_09)
+acs_09_sf <- rename(acs_09_sf, 
+       pop_09 = "B01001_001E",
+       pop_09_est = "B01001_001M")
+
+acs_19_sf <- st_sf(acs_19)
+acs_19_sf <- rename(acs_19_sf, 
+       pop_19 = "B01001_001E",
+       pop_19_est = "B01001_001M")
+
+st_write(acs_19_sf, "acs_19_sf/acs_19_sf.shp")
+
 ```
 
 ```{r helper functions, warning = FALSE, message = FALSE}
