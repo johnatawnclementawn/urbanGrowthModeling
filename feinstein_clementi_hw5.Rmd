@@ -1,11 +1,11 @@
 ---
 title: "cpln_hw5"
-author: "Henry Feinstein"
+author: "Henry Feinstein & Johnathan Clementi"
 date: "4/27/2022"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=FALSE, message=FALSE, warning=FALSE,}
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
@@ -67,9 +67,32 @@ palette10 <- c("#f7fcf0","#e0f3db","#ccebc5","#a8ddb5","#7bccc4",
                "#4eb3d3","#2b8cbe","#0868ac","#084081","#f7fcf0")
 ```
 
-```{r pull census, warning = FALSE, message = FALSE}
-census_api_key("b984db6b084601048019e6f7f64f500a87b01b80", overwrite = TRUE)
+```{r helper functions, warning = FALSE, message = FALSE}
+#this function converts a column in to quintiles. It is used for mapping.
+quintileBreaks <- function(df,variable) {
+    as.character(quantile(df[[variable]],
+                          c(.01,.2,.4,.6,.8),na.rm=T))
+}
+#This function can be used to convert a polygon sf to centroids xy coords.
+xyC <- function(aPolygonSF) {
+  as.data.frame(
+    cbind(x=st_coordinates(st_centroid(aPolygonSF))[,1],
+          y=st_coordinates(st_centroid(aPolygonSF))[,2]))
+} 
+#this function convert a raster to a data frame so it can be plotted in ggplot
+rast <- function(inRaster) {
+  data.frame(
+    xyFromCell(inRaster, 1:ncell(inRaster)), 
+    value = getValues(inRaster)) }
+```
 
+```{r set_globals, warning = FALSE, message = FALSE}
+# census_api_key("b984db6b084601048019e6f7f64f500a87b01b80", overwrite = TRUE)
+
+path = getwd() # gets absolute path for the working directory that this code is in
+```
+
+```{r pull census, warning = FALSE, message = FALSE}
 acs_vars = c("B01001_001")
 counties = c("Adams", "Arapahoe", "Boulder", "Broomfield", "Denver", "Clear Creek", "Douglas", "Gilpin", "Jefferson")
 
@@ -101,25 +124,92 @@ acs_19_sf <- rename(acs_19_sf,
        pop_19 = "B01001_001E",
        pop_19_est = "B01001_001M")
 
-st_write(acs_19_sf, "acs_19_sf/acs_19_sf.shp")
+# st_write(acs_19_sf, "acs_19_sf/acs_19_sf.shp")
+
+drcog <- st_read(paste0(path, "/drcog_shp/drcog_AOI_dissolved.shp")) %>%
+  st_transform(crs = 26954)
 
 ```
 
-```{r helper functions, warning = FALSE, message = FALSE}
-#this function converts a column in to quintiles. It is used for mapping.
-quintileBreaks <- function(df,variable) {
-    as.character(quantile(df[[variable]],
-                          c(.01,.2,.4,.6,.8),na.rm=T))
-}
-#This function can be used to convert a polygon sf to centroids xy coords.
-xyC <- function(aPolygonSF) {
-  as.data.frame(
-    cbind(x=st_coordinates(st_centroid(aPolygonSF))[,1],
-          y=st_coordinates(st_centroid(aPolygonSF))[,2]))
-} 
-#this function convert a raster to a data frame so it can be plotted in ggplot
-rast <- function(inRaster) {
-  data.frame(
-    xyFromCell(inRaster, 1:ncell(inRaster)), 
-    value = getValues(inRaster)) }
+```{r pull_landcover}
+NLCD08 <- raster(paste0(path, "/LandUseData/NLCD_08_resample.tif"))
+NLCD19 <- raster(paste0(path, "/LandUseData/NLCD_19_resample.tif"))
+lc_change <- raster(paste0(path, "/LandUseData/LandCoverChange.tif"))
 ```
+
+
+```{r plot_msa, message=FALSE, warning=FALSE}
+# ggplot() +
+#   geom_sf(data=drcog) +
+#   geom_raster(data=rast(lc_change) %>% na.omit %>% filter(value > 0), 
+#               aes(x,y,fill=as.factor(value))) +
+#   scale_fill_viridis(direction = -1, discrete=TRUE, name ="Land Cover\nChange") +
+#   labs(title = "Land Cover Change, 2000-2010") +
+#   mapTheme +
+#   theme(legend.direction="horizontal")
+```
+
+```{r, warning = FALSE, message = FALSE}
+reclassMatrix <- 
+  matrix(c(
+    0,12,0,
+    12,24,1,
+    24,Inf,0),
+  ncol=3, byrow=T)
+
+reclassMatrix
+```
+
+
+```{r, warning = FALSE, message = FALSE}
+lc_change2 <- 
+  reclassify(lc_change,reclassMatrix)
+
+lc_change2[lc_change2 < 1] <- NA
+
+names(lc_change2) <- "lc_change"
+
+# ggplot() +
+#   geom_sf(data=drcog) +
+#   geom_raster(data=rast(lc_change2) %>% na.omit, 
+#               aes(x,y,fill=as.factor(value))) +
+#   scale_fill_viridis(discrete=TRUE, name ="Land Cover\nChange") + 
+#   labs(title="Development Land Use Change") +
+#   mapTheme
+```
+
+Next, the fishnet is created at 450 by 450 foot resolution and subset it to the Denver Region COG with `st_intersection`. 
+
+```{r, warning = FALSE, message = FALSE}
+drcog_fishnet <- 
+  st_make_grid(drcog, 450) %>%
+  st_sf()
+
+drcog_fishnet <-
+  drcog_fishnet[drcog,]
+
+# st_write(drcog_fishnet, paste0(path, "/drcog_shp/drcog_fishnet.shp"))
+```
+
+```{r, warning = FALSE, message = FALSE}
+changePoints <-
+  rasterToPoints(lc_change2) %>%
+  as.data.frame() %>%
+  st_as_sf(coords = c("x", "y"), crs = st_crs(drcog_fishnet))
+
+fishnet <- 
+  aggregate(changePoints, drcog_fishnet, sum) %>%
+  mutate(lc_change = ifelse(is.na(lc_change),0,1),
+         lc_change = as.factor(lc_change))
+
+ggplot() +
+  geom_sf(data=drcog) +
+  geom_point(data=fishnet, 
+             aes(x=xyC(fishnet)$x, y=xyC(fishnet)$y, colour=lc_change)) +
+  scale_colour_manual(values = palette2,
+                      labels=c("No Change","New Development"),
+                      name = "") +
+  labs(title = "Land Cover Development Change", subtitle = "As fishnet centroids") +
+  mapTheme
+```
+
