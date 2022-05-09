@@ -1044,7 +1044,7 @@ ggplot() +
 # # Rename 2019 land cover fields so they can be used in the prediction below:
 dat19 <- dat2 %>%
   dplyr::select(-'developed', -'forest', -'farm', -'wetlands', -'otherUndeveloped', -'water') %>%
-rename(developed = developed19,
+  rename(developed = developed19,
        forest = forest19,
        farm = farm19,
        wetlands = wetlands19,
@@ -1057,17 +1057,17 @@ rename(developed = developed19,
 
 ```{r, warning = FALSE, message = FALSE}
 county_specific_metrics <- 
-  dat2 %>%
+  dat19 %>%
   #predict development demand from our model
   mutate(Development_Demand = predict(Model7, dat19, type="response")) %>%
   #get a count count of grid cells by county which we can use to calculate rates below
   left_join(st_set_geometry(dat, NULL) %>% group_by(NAME) %>% summarize(count = n())) %>%
   #calculate summary statistics by county
   group_by(NAME) %>%
-  summarize(Total_Farmland = sum(as.numeric(farm19)) / max(count),
-            Total_Forest = sum(as.numeric(forest19)) / max(count),
-            Total_Wetlands = sum(as.numeric(wetlands19)) / max(count),
-            Total_Undeveloped = sum(as.numeric(otherUndeveloped19)) / max(count),
+  summarize(Total_Farmland = sum(as.numeric(farm)) / max(count),
+            Total_Forest = sum(as.numeric(forest)) / max(count),
+            Total_Wetlands = sum(as.numeric(wetlands)) / max(count),
+            Total_Undeveloped = sum(as.numeric(otherUndeveloped)) / max(count),
             Sensitive_Land_Lost = sum(as.numeric(sensitive_lost19)) / max(count),
             Sensitive_Regions = sum(as.numeric(sensitiveRegions)) / max(count),
             Mean_Development_Demand = mean(Development_Demand)) %>%
@@ -1099,4 +1099,170 @@ county_specific_metrics %>%
     plotTheme + theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="bottom")
 ```
 
+```{r}
+# INGEST new highway distances with new highway added
+drcog_supply_highways <- st_read(paste0(path, "/highway_clip/highway_clip_supplyAdded.shp"))
+dist_to_highway_supply <- raster(paste0(path, "/highway_clip/distToHighAdded.tif"))
+names(dist_to_highway_supply) <- "distance_highways"
+
+highwayPoints_supply <-
+  rasterToPoints(dist_to_highway_supply) %>%
+  as.data.frame() %>%
+  st_as_sf(coords = c("x", "y"), crs = st_crs(drcog_fishnet))
+
+dat30 <- 
+  aggregate(highwayPoints_supply, dat19, mean) %>%
+  mutate(dist_to_highway = ifelse(is.na(distance_highways),0,distance_highways))
+  
+
+ggplot() +
+  geom_sf(data=drcog) +
+  geom_point(data=dat30, aes(x=xyC(dat30)[,1], 
+                                             y=xyC(dat30)[,2], 
+                 colour=factor(ntile(dist_to_highway,5))),size=1.5) +
+  scale_colour_manual(values = palette5,
+                      labels=substr(quintileBreaks(dat30,"distance_highways"),1,8),
+                      name="Quintile\nBreaks") +
+  geom_sf(data=drcog_supply_highways, colour = "red") +
+  labs(title = "Distance to Highways",
+       subtitle = "As fishnet centroids; Highways visualized in red") +
+  mapTheme
+```
+
+```{r}
+dat30 <- dat19 %>% 
+  dplyr::select(-dist_to_highway) %>%
+  cbind(dat30 %>% dplyr::select(dist_to_highway) %>% st_drop_geometry()) %>%
+  st_sf()
+```
+
+```{r}
+dat19_devDemand <- dat19 %>%
+  #predict development demand from our model
+  mutate(Development_Demand = predict(Model7, dat19, type="response")) 
+
+dat30_devDemand <- dat30 %>%
+  #predict development demand from our model
+  mutate(Development_Demand = predict(Model7, dat30, type="response"))
+```
+
+
+```{r}
+temp <- dat30_devDemand %>%
+  dplyr::filter(NAME %in% c('Douglas','Jefferson')) 
+
+temp %>%
+  ggplot() +  
+  geom_point(aes(x=xyC(temp)[,1], y=xyC(temp)[,2], colour = factor(ntile(Development_Demand,5)))) +
+  scale_colour_manual(values = palette5,
+                    labels=substr(quintileBreaks(temp,"Development_Demand"),1,4),
+                    name="Quintile\nBreaks") +
+  geom_sf(data=studyAreaCounties %>% dplyr::filter(NAME %in% c('Douglas','Jefferson')), fill=NA, colour="black", size=1) +
+  labs(title= "Development Demand in 2030: Predicted Probabilities") +
+  mapTheme
+```
+```{r}
+# Get the approximate number of people per developed cell in 2019
+temp <- dat19 %>% filter(developed == 1)
+popPerDevCell19 <- mean(temp$totalpop_19)
+
+# Projected change in population between 2019 and 2030
+total_popchange <- sum(countyPopulation_2030$county_projection_2030) - sum(countyPopulation_2030$county_population_2019)
+
+# Number of cells to allocate for development:
+numCellsToAllocate <- total_popchange / popPerDevCell19
+
+#Calculate acreage of those cells for context:
+allocatedAcreage <- (450*450*1253) / 43560
+```
+
+```{r}
+# ingest distance to sensitive regions 
+distSensitiveRegions <- raster(paste0(path, "/LandUseData/distSensitiveRegions.tif"))
+names(distSensitiveRegions) <- "distance_sensitive"
+
+sensRegions_points <-
+  rasterToPoints(distSensitiveRegions) %>%
+  as.data.frame() %>%
+  st_as_sf(coords = c("x", "y"), crs = st_crs(drcog_fishnet))
+
+dat30 <- 
+  aggregate(sensRegions_points, dat19, mean) %>%
+  mutate(dist_to_sensReg = ifelse(is.na(distance_sensitive),0,distance_sensitive))
+  
+
+ggplot() +
+  geom_sf(data=drcog) +
+  geom_point(data=dat30, aes(x=xyC(dat30)[,1], 
+                                             y=xyC(dat30)[,2], 
+                 colour=factor(ntile(dist_to_sensReg,5))),size=1.5) +
+  scale_colour_manual(values = palette5,
+                      labels=substr(quintileBreaks(dat30,"distance_sensitive"),1,8),
+                      name="Quintile\nBreaks") +
+  labs(title = "Distance to Sensitive Regions",
+       subtitle = "As fishnet centroids") +
+  mapTheme
+```
+```{r}
+# Compare added highway with not added highway
+datAllocation19 <- dat19_devDemand %>%
+  cbind(dat30$dist_to_sensReg) %>%
+  rename(dist_to_sensReg = dat30.dist_to_sensReg) %>%
+  st_sf()
+
+datAllocation30 <- dat30_devDemand %>%
+  cbind(dat30$dist_to_sensReg) %>%
+  rename(dist_to_sensReg = dat30.dist_to_sensReg) %>%
+  st_sf()
+```
+
+```{r}
+# Filter by our suitable cells:
+datAllocation19 <- datAllocation19 %>%
+  mutate(normDSR = (dist_to_sensReg / max(dist_to_sensReg)),
+         normDHWY = (1 - (dist_to_highway / max(dist_to_highway))), # optimize for closer to hwy rather than far away
+         normLagDev = (lagDevelopment / max(lagDevelopment)),
+         allocationScore = (.2 * normDSR) + (5 * normDHWY) +  (10 * Development_Demand) + (10 * normLagDev)) %>%
+  arrange(desc(allocationScore))
+
+# Identify cells to be allocated for development:
+datAllocation19 <- datAllocation19 %>%
+  mutate(suitability = case_when(developed == 1 | sensitiveRegions == 1 | water == 1 ~ "Not Suitable",
+                                 developed == 0 | sensitiveRegions == 0  ~ "Suitable"))
+
+# Select the cells to be allocated:
+allocated19 <- datAllocation19 %>%
+  filter(suitability == "Suitable") %>% 
+  arrange(desc(allocationScore))
+
+allocated19 = allocated19[1:numCellsToAllocate,]
+  
+
+mapview::mapview(allocated19)
+```
+
+```{r}
+# Filter by our suitable cells:
+datAllocation30 <- datAllocation30 %>%
+  mutate(normDSR = (dist_to_sensReg / max(dist_to_sensReg)),
+         normDHWY = (1 - (dist_to_highway / max(dist_to_highway))), # optimize for closer to hwy rather than far away
+         normLagDev = (lagDevelopment / max(lagDevelopment)),
+         allocationScore = (.2 * normDSR) + (5 * normDHWY) +  (10 * Development_Demand) + (10 * normLagDev)) %>%
+  arrange(desc(allocationScore))
+
+# Identify cells to be allocated for development:
+datAllocation30 <- datAllocation30 %>%
+  mutate(suitability = case_when(developed == 1 | sensitiveRegions == 1 | water == 1 ~ "Not Suitable",
+                                 developed == 0 | sensitiveRegions == 0  ~ "Suitable"))
+
+# Select the cells to be allocated:
+allocated30 <- datAllocation30 %>%
+  filter(suitability == "Suitable") %>% 
+  arrange(desc(allocationScore))
+
+allocated30 = allocated30[1:numCellsToAllocate,]
+  
+
+mapview::mapview(allocated30)
+```
 
