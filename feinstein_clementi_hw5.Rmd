@@ -2,7 +2,12 @@
 title: "cpln_hw5"
 author: "Henry Feinstein & Johnathan Clementi"
 date: "4/27/2022"
-output: html_document
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    code_download: true
 ---
 
 ```{r setup, include=FALSE, message=FALSE, warning=FALSE,}
@@ -71,9 +76,14 @@ options(scipen=999)
 
 ```{r helper functions, warning = FALSE, message = FALSE}
 #this function converts a column in to quintiles. It is used for mapping.
-quintileBreaks <- function(df,variable) {
-    as.character(quantile(df[[variable]],
-                          c(.01,.2,.4,.6,.8),na.rm=T))
+quintileBreaks <- function(df, variable, rnd) {
+  if (missing(rnd)) {
+    as.character(quantile(round(df[[variable]],0),
+                          c(.01,.2,.4,.6,.8), na.rm=T))
+  } else if (rnd == FALSE | rnd == F) {
+    as.character(formatC(quantile(df[[variable]],
+                 c(.01,.2,.4,.6,.8), na.rm=T), digits = 3))
+  }
 }
 #This function can be used to convert a polygon sf to centroids xy coords.
 xyC <- function(aPolygonSF) {
@@ -377,7 +387,7 @@ ggplot() +
        subtitle="Represented as fishnet gridcells; Boundaries omitted") +
   mapTheme, ncol=2)
 ```
-
+</div>
 
 ```{r, warning = FALSE, message = FALSE, results = "hide"}
 drcogHighways <-
@@ -386,7 +396,7 @@ drcogHighways <-
   st_intersection(drcog)
 ```
 
-```{r plot_highway, warning = FALSE, message= FALSE}
+```{r, warning = FALSE, message= FALSE}
 ggplot() +
   geom_point(data=fishnet, 
              aes(x=xyC(fishnet)[,1], y=xyC(fishnet)[,2],colour=lc_change),size=1.5) +
@@ -556,8 +566,9 @@ studyAreaCounties <-
 ```
 
 ```{r, warning = FALSE, message = FALSE}
-ggplot() +
-  geom_sf(data=studyAreaCounties) +
+ggplot(studyAreaCounties) +
+  geom_sf() +
+  geom_sf_label(aes(label=NAME)) +
   labs(title = "Study Area Counties") +
   mapTheme
 ```
@@ -608,7 +619,7 @@ dat %>%
 Next, a table of land cover conversion between 2008 and 2019 is created. The table suggests for instance, that 3% of farmland regionally was converted to development between 2001 and 2010. This indicator should be interpreted in the context of the scale changes we imposed on the data by moving from a 30ft by 30ft raster to a 4000ft by 4000ft fishnet. This is the same reason why the table suggests `developed` area was then “developed”.
 
 ```{r, warning = FALSE, message = FALSE}
-dat %>%
+landCoverConversionTable <- dat %>%
   dplyr::select(lc_change:otherUndeveloped,developed) %>%
   gather(Land_Cover_Type, Value, -lc_change, -geometry) %>%
    st_set_geometry(NULL) %>%
@@ -619,6 +630,8 @@ dat %>%
     filter(lc_change == 1) %>%
   dplyr::select(Land_Cover_Type,Conversion_Rate) %>%
   kable() %>% kable_styling(full_width = F)
+
+save_kable(landCoverConversionTable, paste0(path, "/images/landCoverConversionTable.jpg"))
 ```
 
 ## 4.2. Modeling
@@ -664,6 +677,11 @@ Model7 <- glm(lc_change ~ wetlands + forest  + farm + otherUndeveloped + lagDeve
 
 ```
 
+```{r}
+model7_summary <- modelsummary::modelsummary(Model7)
+model7_summary
+```
+
 
 ```{r, warning = FALSE, message = FALSE}
 modelList <- paste0("Model", 1:7)
@@ -698,9 +716,11 @@ testSetProbs <-
   
 ggplot(testSetProbs, aes(probs)) +
   geom_density(aes(fill=class), alpha=0.5) +
+  geom_vline(xintercept = 0.3, color="red") +
   scale_fill_manual(values = palette2,
                     labels=c("No Change","New Development")) +
   labs(title = "Model 7 Histogram of test set predicted probabilities",
+       subtitle = "Optimal threshold marked  in red",
        x="Predicted Probabilities",y="Density") +
   plotTheme
 ```
@@ -714,7 +734,7 @@ testSetProbs <-
   mutate(predClass_25 = as.factor(ifelse(testSetProbs$probs >= 0.25 ,1,0)),
          predClass_30 = as.factor(ifelse(testSetProbs$probs >= 0.30 ,1,0))) 
 
-testSetProbs %>%
+testSetProbs_table <- testSetProbs %>%
   dplyr::select(-probs) %>%
   gather(Variable, Value, -class) %>%
   group_by(Variable) %>%
@@ -723,6 +743,8 @@ testSetProbs %>%
             Accuracy = round(yardstick::accuracy_vec(class,factor(Value)),2)) %>% 
   kable() %>%
   kable_styling(full_width = F)
+
+save_kable(testSetProbs_table, paste0(path, "/images/testSetProbs_table.jpg"))
 ```
 
 ```{r, warning = FALSE, message = FALSE}
@@ -840,9 +862,11 @@ spatialCV_metrics <-
               Specificity = round(yardstick::spec_vec(class,predClass),2),
               Accuracy = round(yardstick::accuracy_vec(class,predClass),2)) 
 
-spatialCV_metrics %>%
+spatialCV_metrics_table <- spatialCV_metrics %>%
   kable() %>%
   kable_styling(full_width = F)
+
+save_kable(spatialCV_metrics_table, paste0(path, "/images/spatialCV_metrics_table.jpg"))
 ```
 
 # 5. Predicting Land Cover Demand for 2020
@@ -902,6 +926,46 @@ dat_infill %>%
   labs(title= "Development Demand in 2030: Predicted Probabilities") +
   mapTheme
 ```
+```{r}
+popChange09_19 <- dat %>%
+  dplyr::select(pop_Change)
+popChange19_30 <- dat_infill %>%
+  dplyr::select(pop_Change) 
+
+popChange09_19 <- popChange09_19 %>%
+  dplyr::mutate(era = "2009-2019")
+
+popChange19_30 <- popChange19_30 %>%
+  dplyr::mutate(era = "2019-2030")
+```
+
+<div class="superbigimage">
+```{r, warning = FALSE, message = FALSE, fig.height = 8, fig.width= 11}
+
+ggplot() +
+  geom_sf(data=popChange09_19, aes(fill=factor(ntile(pop_Change,5))),colour=NA) +
+  scale_fill_manual(values = palette5,
+                   #  labels=quintileBreaks(popChange09_19,"pop_change", FALSE),
+                   name="Quintile\nBreaks"
+                   ) +
+  labs(title="Population Change, DRCOG: 2009-2019",
+       subtitle="Change per fishnet cell") +
+  mapTheme
+
+ggplot() +
+  geom_sf(data=popChange19_30, aes(fill=factor(ntile(pop_Change,5))),colour=NA) +
+  scale_fill_manual(values = palette5,
+                    labels=substr(quintileBreaks(popChange19_30,"pop_change"),1,4),
+                   name="Quintile\nBreaks") +
+  labs(title="Population Change, DRCOG: 2009-2019",
+       subtitle="Change per fishnet cell") +
+  mapTheme
+
+
+```
+</div>
+
+
 
 ```{r, warning = FALSE, message = FALSE}
 developed19 <- NLCD19 == 21 | NLCD19 == 22 | NLCD19 == 23 | NLCD19 == 24
@@ -966,7 +1030,7 @@ dat2 <-
                                     wetlands == 1 & wetlands19 == 0,1,0))
                       
 ggplot() +
-  geom_point(data=dat2, aes(x=xyC(dat2)[,1], y=xyC(dat2)[,2], colour=as.factor(sensitive_lost19))) +
+  geom_point(data=dat2, aes(x=xyC(dat2)[,1], y=xyC(dat2)[,2], colour=as.factor(sensitive_lost19)), size=2) +
   scale_colour_manual(values = palette2,
                       labels=c("No Change","Sensitive Lost"),
                       name = "") +
@@ -1077,6 +1141,7 @@ county_specific_metrics <-
                    Population_Change_Rate = Population_Change / county_population_2019) %>%
             dplyr::select(NAME,Population_Change_Rate))
 ```
+
 ```{r, warning = FALSE, message = FALSE}
 county_specific_metrics %>%
   gather(Variable, Value, -NAME, -geometry) %>%
@@ -1161,6 +1226,7 @@ temp %>%
   labs(title= "Development Demand in 2030: Predicted Probabilities") +
   mapTheme
 ```
+
 ```{r}
 # Get the approximate number of people per developed cell in 2019
 temp <- dat19 %>% filter(developed == 1)
@@ -1203,6 +1269,7 @@ ggplot() +
        subtitle = "As fishnet centroids") +
   mapTheme
 ```
+
 ```{r}
 # Compare added highway with not added highway
 datAllocation19 <- dat19_devDemand %>%
@@ -1221,7 +1288,7 @@ datAllocation30 <- dat30_devDemand %>%
 datAllocation19 <- datAllocation19 %>%
   mutate(normDSR = (dist_to_sensReg / max(dist_to_sensReg)),
          normDHWY = (1 - (dist_to_highway / max(dist_to_highway))), # optimize for closer to hwy rather than far away
-         normLagDev = (lagDevelopment / max(lagDevelopment)),
+         normLagDev = (1- (lagDevelopment / max(lagDevelopment))),
          allocationScore = (.2 * normDSR) + (5 * normDHWY) +  (10 * Development_Demand) + (10 * normLagDev)) %>%
   arrange(desc(allocationScore))
 
@@ -1238,7 +1305,31 @@ allocated19 <- datAllocation19 %>%
 allocated19 = allocated19[1:numCellsToAllocate,]
   
 
-mapview::mapview(allocated19)
+# mapview::mapview(allocated19)
+```
+
+
+```{r fig.width=12, fig.height=8}
+# ggplot() +
+#   geom_sf(data=studyAreaCounties) +
+#   geom_sf(data=drcog_supply_highways, colour = "red", alpha=0.4, label="Highway") +
+#   geom_point(data=allocated19, aes(x=xyC(allocated19)[,1], 
+#                                              y=xyC(allocated19)[,2], 
+#                  colour=factor(ntile(allocationScore,5))),size=2) +
+#   scale_colour_manual(values = palette5,
+#                       labels=substr(quintileBreaks(allocated19,"allocationScore"),1,8),
+#                       name="Allocation\nScore") +
+#   labs(title = "Demand-side Allocation",
+#        subtitle = "Land development cells are allocated based on just development demand\nRoads in red") +
+#   mapTheme
+
+ggplot() +
+  geom_sf(data=studyAreaCounties) +
+  geom_sf(data=drcogHighways, colour = "red", alpha=0.5, label="Highway") +
+  geom_sf(data=allocated19, color='blue') +
+  labs(title = "Demand-side Allocation",
+       subtitle = "Land development cells are allocated based on development trends alone.\nRoads in red") +
+  mapTheme
 ```
 
 ```{r}
@@ -1246,7 +1337,7 @@ mapview::mapview(allocated19)
 datAllocation30 <- datAllocation30 %>%
   mutate(normDSR = (dist_to_sensReg / max(dist_to_sensReg)),
          normDHWY = (1 - (dist_to_highway / max(dist_to_highway))), # optimize for closer to hwy rather than far away
-         normLagDev = (lagDevelopment / max(lagDevelopment)),
+         normLagDev = (1- (lagDevelopment / max(lagDevelopment))),
          allocationScore = (.2 * normDSR) + (5 * normDHWY) +  (10 * Development_Demand) + (10 * normLagDev)) %>%
   arrange(desc(allocationScore))
 
@@ -1263,6 +1354,50 @@ allocated30 <- datAllocation30 %>%
 allocated30 = allocated30[1:numCellsToAllocate,]
   
 
-mapview::mapview(allocated30)
+# mapview::mapview(allocated30)
 ```
+
+<div class="superbigimage">
+```{r}
+grid.arrange(
+ggplot() +
+  geom_sf(data=studyAreaCounties) +
+  geom_sf(data=drcog_supply_highways, colour = "red", alpha=0.4, label="Highway") +
+  geom_point(data=allocated19, aes(x=xyC(allocated19)[,1], 
+                                             y=xyC(allocated19)[,2], 
+                 colour=factor(ntile(allocationScore,5))),size=2) +
+  scale_colour_manual(values = palette5,
+                      labels=substr(quintileBreaks(allocated19,"allocationScore"),1,8),
+                      name="Allocation\nScore") +
+  labs(title = "Demand-side Allocation",
+       subtitle = "Land development cells are allocated based on just development demand\nRoads in red") +
+  mapTheme,
+
+ggplot() +
+  geom_sf(data=studyAreaCounties) +
+  geom_sf(data=drcog_supply_highways, colour = "red", alpha=0.4, label="Highway") +
+  geom_point(data=allocated30, aes(x=xyC(allocated30)[,1], 
+                                             y=xyC(allocated30)[,2], 
+                 colour=factor(ntile(allocationScore,5))),size=2) +
+  scale_colour_manual(values = palette5,
+                      labels=substr(quintileBreaks(allocated30,"allocationScore"),1,8),
+                      name="Allocation\nScore") +
+  labs(title = "Demand and Supply-side Allocation",
+       subtitle = "Land development cells are allocated based on development trends alone\nRoads in red") +
+  mapTheme,
+ncol = 2)
+```
+</div>
+
+```{r fig.width=12, fig.height=8}
+ggplot() +
+  geom_sf(data=studyAreaCounties) +
+  geom_sf(data=drcog_supply_highways, colour = "red", alpha=0.5, label="Highway") +
+  geom_sf(data=drcog_supply_highways %>% filter(aadt == 0), colour = "red", size=2, label="Highway") +
+  geom_sf(data=allocated30, color='blue') +
+  labs(title = "Demand and Supply-side Allocation",
+       subtitle = "Land development cells are allocated based on development trends and proposed infrastructure\nRoads in red, Proposed road highlighted") +
+  mapTheme
+```
+
 
